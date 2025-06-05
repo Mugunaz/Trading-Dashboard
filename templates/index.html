@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        dark: {
+                            'bg-primary': '#1a1b1e',
+                            'bg-secondary': '#2c2e33',
+                            'text-primary': '#ffffff',
+                            'text-secondary': '#a0a0a0'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-dark-bg-primary min-h-screen text-dark-text-primary">
+    <div class="container mx-auto px-4 py-8">
+        <h1 class="text-3xl font-bold mb-8">Trading Performance Dashboard</h1>
+        
+        <form method="get" class="mb-6 flex items-center gap-4">
+            <label for="account_id" class="text-lg font-semibold">Account:</label>
+            <select name="account_id" id="account_id" class="bg-dark-bg-primary text-white rounded px-3 py-2" onchange="this.form.submit()">
+                <option value="" {% if not selected_account %}selected{% endif %}>All</option>
+                {% for acc in accounts %}
+                    <option value="{{ acc }}" {% if selected_account == acc %}selected{% endif %}>Account {{ acc }}</option>
+                {% endfor %}
+            </select>
+            <!-- Preserve year/month in query params -->
+            <input type="hidden" name="year" value="{{ calendar_data.year }}">
+            <input type="hidden" name="month" value="{{ calendar_data.month }}">
+        </form>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            <!-- Total P&L Card -->
+            <div class="bg-dark-bg-secondary rounded-lg p-6 shadow-lg">
+                <h2 class="text-xl font-semibold mb-2">Total P&L</h2>
+                <p class="text-5xl font-bold {% if metrics.total_pl >= 0 %}text-green-500{% else %}text-red-500{% endif %}">
+                    ${{ "{:,.2f}".format(metrics.total_pl) }}
+                </p>
+            </div>
+
+            <!-- Win Rate Card with Pie Chart -->
+            <div class="bg-dark-bg-secondary rounded-lg p-6 shadow-lg">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <h2 class="text-xl font-semibold mb-2">Win Rate</h2>
+                        <p class="text-5xl font-bold text-white">
+                            {{ metrics.win_rate }}%
+                        </p>
+                    </div>
+                    <div id="winRateChart" class="w-32 h-32"></div>
+                </div>
+            </div>
+
+            <!-- Average Win/Loss Card -->
+            <div class="bg-dark-bg-secondary rounded-lg p-6 shadow-lg flex flex-col justify-between">
+                <div>
+                    <div class="flex items-center mb-2">
+                        <h2 class="text-xl font-semibold mr-2">Avg Win / Avg Loss</h2>
+                        <span class="text-xs text-dark-text-secondary cursor-pointer" title="Average win and loss per trade">&#9432;</span>
+                    </div>
+                    <!-- Proportional Bar -->
+                    {% set win = metrics.avg_win|abs %}
+                    {% set loss = metrics.avg_loss|abs %}
+                    {% set total = win + loss if (win + loss) > 0 else 1 %}
+                    <div class="w-full h-3 rounded bg-dark-bg-primary flex overflow-hidden">
+                        <div class="bg-green-500 h-3" style="width: {{ (win / total * 100)|round(2) }}%"></div>
+                        <div class="bg-red-500 h-3" style="width: {{ (loss / total * 100)|round(2) }}%"></div>
+                    </div>
+                </div>
+                <div class="flex justify-between items-end mt-4">
+                    <div class="flex flex-col items-start">
+                        <span class="text-3xl font-bold">{{ (win / loss)|round(2) if loss != 0 else '∞' }}</span>
+                    </div>
+                    <div class="flex flex-col items-end">
+                        <span class="text-xl font-bold text-green-500">${{ "{:,.2f}".format(metrics.avg_win) }}</span>
+                        <span class="text-xl font-bold text-red-500">${{ "{:,.2f}".format(metrics.avg_loss) }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Full-width Daily Net Cumulative P&L Card -->
+        <div class="bg-dark-bg-secondary rounded-lg p-6 shadow-lg mt-6">
+            <div class="flex items-center mb-2">
+                <h2 class="text-md font-semibold mr-2">Daily Net Cumulative P&amp;L</h2>
+                <span class="text-xs text-dark-text-secondary cursor-pointer" title="Cumulative net profit and loss by day">&#9432;</span>
+            </div>
+            <div id="pnlChart" class="w-full" style="height:320px;"></div>
+        </div>
+
+        <!-- Full-width Calendar View -->
+        <div id="calendar-section" class="bg-dark-bg-secondary rounded-lg p-6 shadow-lg mt-6">
+            <div class="flex justify-between items-center mb-2">
+                <div class="flex items-center gap-2">
+                    {% set prev_month = calendar_data.month - 1 if calendar_data.month > 1 else 12 %}
+                    {% set prev_year = calendar_data.year if calendar_data.month > 1 else calendar_data.year - 1 %}
+                    {% set next_month = calendar_data.month + 1 if calendar_data.month < 12 else 1 %}
+                    {% set next_year = calendar_data.year if calendar_data.month < 12 else calendar_data.year + 1 %}
+                    <a href="?year={{ prev_year }}&month={{ prev_month }}{% if selected_account %}&account_id={{ selected_account }}{% endif %}" class="calendar-nav text-lg px-2 py-1 rounded hover:bg-dark-bg-primary" title="Previous Month">&lt;</a>
+                    <span class="text-md font-semibold">{{ calendar_data.year }} {{ calendar_data.month_name }}</span>
+                    <a href="?year={{ next_year }}&month={{ next_month }}{% if selected_account %}&account_id={{ selected_account }}{% endif %}" class="calendar-nav text-lg px-2 py-1 rounded hover:bg-dark-bg-primary" title="Next Month">&gt;</a>
+                </div>
+                <div class="text-center flex-1">
+                    <span class="font-semibold">Monthly P/L: </span>
+                    <span class="font-bold {% if calendar_data.month_pnl > 0 %}text-green-500{% elif calendar_data.month_pnl < 0 %}text-red-500{% else %}text-white{% endif %}">${{ '%.2f'|format(calendar_data.month_pnl) }}</span>
+                </div>
+                <a href="?year={{ current_year }}&month={{ current_month }}{% if selected_account %}&account_id={{ selected_account }}{% endif %}" class="calendar-nav bg-dark-bg-primary text-xs px-3 py-1 rounded ml-2">Today</a>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-center select-none table-fixed">
+                    <thead>
+                        <tr class="text-dark-text-secondary">
+                            <th class="py-2">Su</th>
+                            <th>Mo</th>
+                            <th>Tu</th>
+                            <th>We</th>
+                            <th>Th</th>
+                            <th>Fr</th>
+                            <th>Sa</th>
+                            <th class="text-right">&nbsp;</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for week in calendar_data.weeks %}
+                        <tr>
+                            {% for day in week %}
+                                {% if day == 0 %}
+                                    <td class="h-20 w-24 align-top border border-dark-bg-primary relative bg-dark-bg-primary">
+                                        <div class="absolute left-1 top-1 text-xs text-dark-text-secondary opacity-30">&nbsp;</div>
+                                    </td>
+                                {% else %}
+                                    {% set d = calendar_data.daily[day] %}
+                                    <td class="h-20 w-24 align-top border border-dark-bg-primary relative cursor-pointer
+                                        {% if d.pnl > 0 %}bg-green-900/40{% elif d.pnl < 0 %}bg-red-900/40{% else %}bg-dark-bg-secondary{% endif %}"
+                                        data-date="{{ calendar_data.year }}-{{ '%02d'|format(calendar_data.month) }}-{{ '%02d'|format(day) }}"
+                                        data-count="{{ d.count }}">
+                                        <div class="absolute left-1 top-1 text-xs text-white">{{ day }}</div>
+                                        <div class="font-semibold text-lg mt-4 {% if d.pnl > 0 %}text-green-500{% elif d.pnl < 0 %}text-red-500{% else %}text-white{% endif %}">
+                                            {% if d.pnl != 0 %}${{ '%.2f'|format(d.pnl) }}{% endif %}
+                                        </div>
+                                        <div class="text-xs text-white mt-1">
+                                            {% if d.count > 0 %}{{ d.count }} trade{{ 's' if d.count > 1 else '' }}{% endif %}
+                                        </div>
+                                    </td>
+                                {% endif %}
+                            {% endfor %}
+                            <!-- Weekly summary -->
+                            <td class="h-20 w-24 align-top text-right px-2">
+                                <div class="font-semibold text-xs text-white">Week {{ loop.index }}</div>
+                                <div class="font-bold {% if calendar_data.weekly[loop.index0].pnl > 0 %}text-green-500{% elif calendar_data.weekly[loop.index0].pnl < 0 %}text-red-500{% else %}text-white{% endif %}">${{ '%.2f'|format(calendar_data.weekly[loop.index0].pnl) }}</div>
+                                <div class="text-xs text-white">{{ calendar_data.weekly[loop.index0].count }} trades</div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Stats Cards Grid -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
+            <!-- Most Active Day -->
+            <div class="bg-dark-bg-secondary rounded-lg p-4 flex flex-col">
+                <div class="flex items-center mb-1">
+                    <span class="text-sm font-semibold">Most Active Day</span>
+                    <span class="text-xs text-dark-text-secondary ml-1 cursor-pointer" title="Day with the most trades">&#9432;</span>
+                </div>
+                <span class="text-2xl font-bold">{{ stats.most_active_day or '-' }}</span>
+                <div class="text-xs text-dark-text-secondary mt-2">
+                    {{ stats.most_active_days }} active days<br>
+                    {{ stats.most_active_trades }} total trades<br>
+                    {{ stats.most_active_avg }} avg trades/day
+                </div>
+            </div>
+            <!-- Most Profitable Day -->
+            <div class="bg-dark-bg-secondary rounded-lg p-4 flex flex-col">
+                <div class="flex items-center mb-1">
+                    <span class="text-sm font-semibold">Most Profitable Day</span>
+                    <span class="text-xs text-dark-text-secondary ml-1 cursor-pointer" title="Day with the highest profit">&#9432;</span>
+                </div>
+                <span class="text-2xl font-bold">{{ stats.most_prof_day or '-' }}</span>
+                <span class="text-lg font-bold text-green-500 mt-2">${{ '%.2f'|format(stats.most_prof_val) }}</span>
+            </div>
+            <!-- Least Profitable Day -->
+            <div class="bg-dark-bg-secondary rounded-lg p-4 flex flex-col">
+                <div class="flex items-center mb-1">
+                    <span class="text-sm font-semibold">Least Profitable Day</span>
+                    <span class="text-xs text-dark-text-secondary ml-1 cursor-pointer" title="Day with the lowest profit">&#9432;</span>
+                </div>
+                <span class="text-2xl font-bold">{{ stats.least_prof_day or '-' }}</span>
+                <span class="text-lg font-bold text-red-500 mt-2">${{ '%.2f'|format(stats.least_prof_val) }}</span>
+            </div>
+            <!-- Total Number of Trades -->
+            <div class="bg-dark-bg-secondary rounded-lg p-4 flex flex-col">
+                <div class="flex items-center mb-1">
+                    <span class="text-sm font-semibold">Total Number of Trades</span>
+                    <span class="text-xs text-dark-text-secondary ml-1 cursor-pointer" title="Total trades executed">&#9432;</span>
+                </div>
+                <span class="text-2xl font-bold">{{ stats.total_trades }}</span>
+            </div>
+            <!-- Average Trade Duration -->
+            <div class="bg-dark-bg-secondary rounded-lg p-4 flex flex-col">
+                <div class="flex items-center mb-1">
+                    <span class="text-sm font-semibold">Average Trade Duration</span>
+                    <span class="text-xs text-dark-text-secondary ml-1 cursor-pointer" title="Average duration of all trades">&#9432;</span>
+                </div>
+                <span class="text-2xl font-bold">{{ stats.avg_trade_dur }}</span>
+            </div>
+            <!-- Average Win Duration -->
+            <div class="bg-dark-bg-secondary rounded-lg p-4 flex flex-col">
+                <div class="flex items-center mb-1">
+                    <span class="text-sm font-semibold">Average Win Duration</span>
+                    <span class="text-xs text-dark-text-secondary ml-1 cursor-pointer" title="Average duration of winning trades">&#9432;</span>
+                </div>
+                <span class="text-2xl font-bold">{{ stats.avg_win_dur }}</span>
+            </div>
+            <!-- Average Loss Duration -->
+            <div class="bg-dark-bg-secondary rounded-lg p-4 flex flex-col">
+                <div class="flex items-center mb-1">
+                    <span class="text-sm font-semibold">Average Loss Duration</span>
+                    <span class="text-xs text-dark-text-secondary ml-1 cursor-pointer" title="Average duration of losing trades">&#9432;</span>
+                </div>
+                <span class="text-2xl font-bold">{{ stats.avg_loss_dur }}</span>
+            </div>
+            <!-- Average Winning Trade -->
+            <div class="bg-dark-bg-secondary rounded-lg p-4 flex flex-col">
+                <div class="flex items-center mb-1">
+                    <span class="text-sm font-semibold">Avg Winning Trade</span>
+                    <span class="text-xs text-dark-text-secondary ml-1 cursor-pointer" title="Average profit of winning trades">&#9432;</span>
+                </div>
+                <span class="text-2xl font-bold text-green-500">${{ '%.2f'|format(stats.avg_win) }}</span>
+            </div>
+            <!-- Average Losing Trade -->
+            <div class="bg-dark-bg-secondary rounded-lg p-4 flex flex-col">
+                <div class="flex items-center mb-1">
+                    <span class="text-sm font-semibold">Avg Losing Trade</span>
+                    <span class="text-xs text-dark-text-secondary ml-1 cursor-pointer" title="Average loss of losing trades">&#9432;</span>
+                </div>
+                <span class="text-2xl font-bold text-red-500">${{ '%.2f'|format(stats.avg_loss) }}</span>
+            </div>
+            <!-- Trade Direction % -->
+            <div class="bg-dark-bg-secondary rounded-lg p-4 flex flex-col">
+                <div class="flex items-center mb-1">
+                    <span class="text-sm font-semibold">Trade Direction %</span>
+                    <span class="text-xs text-dark-text-secondary ml-1 cursor-pointer" title="Percent of trades that are LONG">&#9432;</span>
+                </div>
+                <span class="text-2xl font-bold">{{ stats.trade_dir_pct }}%</span>
+            </div>
+            <!-- Best Trade -->
+            <div class="bg-dark-bg-secondary rounded-lg p-4 flex flex-col">
+                <div class="flex items-center mb-1">
+                    <span class="text-sm font-semibold">Best Trade</span>
+                    <span class="text-xs text-dark-text-secondary ml-1 cursor-pointer" title="Trade with the highest profit">&#9432;</span>
+                </div>
+                <span class="text-2xl font-bold text-green-500">${{ '%.2f'|format(stats.best_trade.profit) if stats.best_trade else '-' }}</span>
+                {% if stats.best_trade %}
+                <span class="text-xs text-dark-text-secondary mt-2">
+                    {{ stats.best_trade.side.title() }} {{ stats.best_trade.quantity }}/{{ stats.best_trade.symbol }} @ {{ stats.best_trade.price }}<br>
+                    Exited @ {{ stats.best_trade.close_price }}<br>
+                    {{ stats.best_trade.exit_time }}
+                </span>
+                {% endif %}
+            </div>
+            <!-- Worst Trade -->
+            <div class="bg-dark-bg-secondary rounded-lg p-4 flex flex-col">
+                <div class="flex items-center mb-1">
+                    <span class="text-sm font-semibold">Worst Trade</span>
+                    <span class="text-xs text-dark-text-secondary ml-1 cursor-pointer" title="Trade with the lowest profit">&#9432;</span>
+                </div>
+                <span class="text-2xl font-bold text-red-500">${{ '%.2f'|format(stats.worst_trade.profit) if stats.worst_trade else '-' }}</span>
+                {% if stats.worst_trade %}
+                <span class="text-xs text-dark-text-secondary mt-2">
+                    {{ stats.worst_trade.side.title() }} {{ stats.worst_trade.quantity }}/{{ stats.worst_trade.symbol }} @ {{ stats.worst_trade.price }}<br>
+                    Exited @ {{ stats.worst_trade.close_price }}<br>
+                    {{ stats.worst_trade.exit_time }}
+                </span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Trades Modal -->
+    <div id="tradesModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
+        <div class="bg-dark-bg-secondary rounded-lg p-6 max-w-4xl w-full max-h-[80vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold" id="modalDate"></h2>
+                <button onclick="closeTradesModal()" class="text-white hover:text-gray-300">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left">
+                    <thead>
+                        <tr class="text-white border-b border-gray-700">
+                            <th class="py-2 px-4">Time</th>
+                            <th class="py-2 px-4">Symbol</th>
+                            <th class="py-2 px-4">Side</th>
+                            <th class="py-2 px-4">Quantity</th>
+                            <th class="py-2 px-4">Entry</th>
+                            <th class="py-2 px-4">Exit</th>
+                            <th class="py-2 px-4">P&L</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tradesTableBody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Win Rate Pie Chart
+        const winRateData = [{
+            values: [{{ metrics.winning_trades }}, {{ metrics.total_trades - metrics.winning_trades }}],
+            labels: ['Winning Trades', 'Losing Trades'],
+            type: 'pie',
+            hole: 0.4,
+            marker: {
+                colors: ['#22c55e', '#ef4444']
+            },
+            textinfo: 'none',
+            hoverinfo: 'label+value',
+            showlegend: false
+        }];
+
+        const winRateLayout = {
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            margin: {
+                l: 0,
+                r: 0,
+                b: 0,
+                t: 0,
+                pad: 0
+            },
+            font: {
+                color: '#ffffff'
+            },
+            autosize: true
+        };
+
+        Plotly.newPlot('winRateChart', winRateData, winRateLayout, {
+            displayModeBar: false,
+            responsive: true
+        });
+
+        // Daily Net Cumulative P&L Line Chart
+        const pnlDates = {{ daily_pnl_dates|tojson }};
+        const pnlValues = {{ daily_pnl_values|tojson }};
+        // Split into positive and negative for area color
+        const zeroIdx = pnlValues.findIndex(v => v >= 0);
+        const negX = pnlDates.slice(0, zeroIdx === -1 ? pnlDates.length : zeroIdx+1);
+        const negY = pnlValues.slice(0, zeroIdx === -1 ? pnlValues.length : zeroIdx+1);
+        const posX = pnlDates.slice(zeroIdx === -1 ? pnlDates.length : zeroIdx);
+        const posY = pnlValues.slice(zeroIdx === -1 ? pnlValues.length : zeroIdx);
+        const traces = [];
+        if (negX.length > 1) {
+            traces.push({
+                x: negX,
+                y: negY,
+                type: 'scatter',
+                mode: 'lines+markers',
+                fill: 'tozeroy',
+                line: { color: '#ef4444', width: 2 },
+                marker: { color: '#ef4444', size: 5 },
+                hoverlabel: { bgcolor: '#222', font: { color: '#fff' } },
+                name: 'Negative'
+            });
+        }
+        if (posX.length > 0) {
+            traces.push({
+                x: posX,
+                y: posY,
+                type: 'scatter',
+                mode: 'lines+markers',
+                fill: 'tozeroy',
+                line: { color: '#22c55e', width: 2 },
+                marker: { color: '#22c55e', size: 5 },
+                hoverlabel: { bgcolor: '#222', font: { color: '#fff' } },
+                name: 'Positive'
+            });
+        }
+        const minY = Math.min(...pnlValues);
+        const maxY = Math.max(...pnlValues);
+        const pad = Math.max(10, Math.round((maxY - minY) * 0.05));
+        const pnlLayout = {
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            margin: { l: 50, r: 20, b: 50, t: 20 },
+            xaxis: {
+                title: { text: 'Date', standoff: 10 },
+                color: '#fff',
+                tickfont: { color: '#fff' },
+                gridcolor: '#444',
+                showline: false
+            },
+            yaxis: {
+                title: { text: 'Profit', standoff: 10 },
+                color: '#fff',
+                tickfont: { color: '#fff' },
+                gridcolor: '#444',
+                showline: false,
+                range: [minY - pad, maxY + pad]
+            },
+            font: { color: '#fff' },
+            hovermode: 'x unified',
+        };
+        Plotly.newPlot('pnlChart', traces, pnlLayout, {
+            displayModeBar: false,
+            responsive: true
+        });
+
+        function bindCalendarNav() {
+            document.querySelectorAll('.calendar-nav').forEach(function(link) {
+                link.onclick = function(e) {
+                    e.preventDefault();
+                    // Get current account_id from the select element
+                    const accountSelect = document.getElementById('account_id');
+                    const accountId = accountSelect ? accountSelect.value : '';
+                    // Add account_id to the URL if it exists
+                    let url = link.href;
+                    if (accountId) {
+                        url += (url.includes('?') ? '&' : '?') + 'account_id=' + accountId;
+                    }
+                    fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+                        .then(resp => resp.text())
+                        .then(html => {
+                            // Extract the calendar-section from the response
+                            const parser = new DOMParser();
+                            const doc = parser.parseFromString(html, 'text/html');
+                            const newCal = doc.querySelector('#calendar-section');
+                            if (newCal) {
+                                document.querySelector('#calendar-section').innerHTML = newCal.innerHTML;
+                                bindCalendarNav(); // re-bind navigation
+                                bindCalendarCellClicks(); // re-bind cell clicks
+                            } else {
+                                window.location = url; // fallback
+                            }
+                        });
+                };
+            });
+        }
+
+        function bindCalendarCellClicks() {
+            document.querySelectorAll('td[data-date]').forEach(cell => {
+                cell.addEventListener('click', function() {
+                    const date = this.getAttribute('data-date');
+                    const count = parseInt(this.getAttribute('data-count') || '0');
+                    showTradesModal(date, count);
+                });
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            bindCalendarNav();
+            bindCalendarCellClicks();
+        });
+
+        function showTradesModal(date, count) {
+            if (count === 0) return;
+            
+            const modal = document.getElementById('tradesModal');
+            const modalDate = document.getElementById('modalDate');
+            const tableBody = document.getElementById('tradesTableBody');
+            
+            // Format date for display
+            const displayDate = new Date(date).toLocaleDateString('en-US', { 
+                weekday: 'long', 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric' 
+            });
+            modalDate.textContent = displayDate;
+            
+            // Get account_id from select element
+            const accountSelect = document.getElementById('account_id');
+            const accountId = accountSelect ? accountSelect.value : '';
+            
+            // Fetch trades for the selected date
+            fetch(`/trades/${date}${accountId ? '?account_id=' + accountId : ''}`)
+                .then(response => response.json())
+                .then(trades => {
+                    tableBody.innerHTML = '';
+                    trades.forEach(trade => {
+                        const row = document.createElement('tr');
+                        row.className = 'border-b border-gray-700 hover:bg-dark-bg-primary';
+                        
+                        // Format time
+                        const time = new Date(trade.exit_time).toLocaleTimeString('en-US', { 
+                            hour: '2-digit', 
+                            minute: '2-digit' 
+                        });
+                        
+                        // Format P&L with color
+                        const pnlClass = trade.profit > 0 ? 'text-green-500' : trade.profit < 0 ? 'text-red-500' : 'text-white';
+                        
+                        row.innerHTML = `
+                            <td class="py-2 px-4">${time}</td>
+                            <td class="py-2 px-4">${trade.symbol}</td>
+                            <td class="py-2 px-4">${trade.side}</td>
+                            <td class="py-2 px-4">${trade.quantity}</td>
+                            <td class="py-2 px-4">$${trade.price.toFixed(2)}</td>
+                            <td class="py-2 px-4">$${trade.close_price.toFixed(2)}</td>
+                            <td class="py-2 px-4 ${pnlClass}">$${trade.profit.toFixed(2)}</td>
+                        `;
+                        tableBody.appendChild(row);
+                    });
+                });
+            
+            modal.classList.remove('hidden');
+        }
+
+        function closeTradesModal() {
+            const modal = document.getElementById('tradesModal');
+            modal.classList.add('hidden');
+        }
+
+        // Close modal when clicking outside
+        document.getElementById('tradesModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeTradesModal();
+            }
+        });
+    </script>
+</body>
+</html> 
